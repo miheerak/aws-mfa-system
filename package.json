@@ -1,0 +1,20 @@
+{
+  "name": "aws-mfa-system",
+  "version": "1.0.0",
+  "description": "An adaptive, risk-based multifactor authentication system built on AWS that combines multiple authentication factors with intelligent risk detection.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/miheerak/aws-mfa-system.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/miheerak/aws-mfa-system/issues"
+  },
+  "homepage": "https://github.com/miheerak/aws-mfa-system#readme"
+}

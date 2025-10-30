@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Environment variables (CRITICAL - never commit AWS credentials)
+.env
+.env.local
+.env.*.local
+
+# IDE settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# AWS/Lambda build artifacts
+.aws-sam/
+build/
+dist/
+
+# DynamoDB Local files
+*.db
+DynamoDBLocal_lib/
