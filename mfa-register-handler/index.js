@@ -1,180 +1,395 @@
+/**
+ * AWS MFA System - User Registration Lambda Handler
+ * Step 17: Complete implementation with embedded utilities
+ * Runtime: Node.js 20.x
+ * KEY SCHEMA: userId (Partition Key)
+ * GSI: username-index for duplicate checking
+ * 
+ * TEST CASES COVERED:
+ * 1. Valid registration (201)
+ * 2. Weak password (400)
+ * 3. Invalid email (400)
+ * 4. Missing fields (400)
+ * 5. Duplicate username (409)
+ */
+
 const AWS = require('aws-sdk');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 
 const dynamodb = new AWS.DynamoDB.DocumentClient();
-const USERS_TABLE = 'Users';
-const PASSWORD_MIN_LENGTH = 12;
-const BCRYPT_ROUNDS = 10;
+const USERS_TABLE = process.env.USERS_TABLE || 'Users';
 
+// =====================================================
+// EMBEDDED UTILITIES (Step 17)
+// =====================================================
+
+/**
+ * Hash password using bcrypt
+ */
+async function hashPassword(plainTextPassword) {
+  try {
+    if (!plainTextPassword || plainTextPassword.trim() === '') {
+      throw new Error('Password cannot be empty');
+    }
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(plainTextPassword, saltRounds);
+    console.log('✓ Password hashed successfully');
+    return hashedPassword;
+  } catch (error) {
+    console.error('✗ Error hashing password:', error);
+    throw new Error('Failed to hash password: ' + error.message);
+  }
+}
+
+/**
+ * Verify password against stored hash
+ */
+async function verifyPassword(plainTextPassword, hashedPassword) {
+  try {
+    if (!plainTextPassword || !hashedPassword) {
+      throw new Error('Both password and hash are required');
+    }
+    const isMatch = await bcrypt.compare(plainTextPassword, hashedPassword);
+    console.log('✓ Password verification completed:', isMatch ? 'Match' : 'No match');
+    return isMatch;
+  } catch (error) {
+    console.error('✗ Error verifying password:', error);
+    return false;
+  }
+}
+
+/**
+ * Validate password strength
+ * Requirements:
+ * - Minimum 8 characters
+ * - Maximum 128 characters
+ * - At least one uppercase letter (A-Z)
+ * - At least one lowercase letter (a-z)
+ * - At least one number (0-9)
+ * - At least one special character
+ */
 function validatePasswordStrength(password) {
-  const requirements = {
-    minLength: password.length >= PASSWORD_MIN_LENGTH,
-    hasUppercase: /[A-Z]/.test(password),
-    hasLowercase: /[a-z]/.test(password),
-    hasNumber: /[0-9]/.test(password),
-    hasSymbol: /[!@#$%^&*()_+\-=\[\]{};:'",.<>?/\\|`~]/.test(password)
-  };
-  const isValid = Object.values(requirements).every(req => req === true);
-  return {
-    isValid,
-    requirements,
-    message: getPasswordErrorMessage(requirements)
-  };
-}
+  const errors = [];
 
-function getPasswordErrorMessage(requirements) {
-  const missing = [];
-  if (!requirements.minLength) missing.push(`at least ${PASSWORD_MIN_LENGTH} characters`);
-  if (!requirements.hasUppercase) missing.push('at least one uppercase letter');
-  if (!requirements.hasLowercase) missing.push('at least one lowercase letter');
-  if (!requirements.hasNumber) missing.push('at least one number');
-  if (!requirements.hasSymbol) missing.push('at least one special character');
-  if (missing.length === 0) return null;
-  return `Password must contain: ${missing.join(', ')}`;
-}
-
-async function hashPassword(password) {
-  try {
-    const salt = await bcrypt.genSalt(BCRYPT_ROUNDS);
-    const hash = await bcrypt.hash(password, salt);
-    return hash;
-  } catch (error) {
-    throw new Error(`Password hashing failed: ${error.message}`);
+  if (!password || password.length < 8) {
+    errors.push('Password must be at least 8 characters long');
   }
-}
 
-async function checkUsernameExists(username) {
-  try {
-    const params = {
-      TableName: USERS_TABLE,
-      IndexName: 'username-index',
-      KeyConditionExpression: 'username = :username',
-      ExpressionAttributeValues: {
-        ':username': username
-      },
-      Select: 'COUNT'
-    };
-    const result = await dynamodb.query(params).promise();
-    return result.Count > 0;
-  } catch (error) {
-    throw new Error(`Failed to check username availability: ${error.message}`);
+  if (password && password.length > 128) {
+    errors.push('Password must not exceed 128 characters');
   }
-}
 
-function createBehaviorProfile() {
+  if (!/[A-Z]/.test(password)) {
+    errors.push('Password must contain at least one uppercase letter (A-Z)');
+  }
+
+  if (!/[a-z]/.test(password)) {
+    errors.push('Password must contain at least one lowercase letter (a-z)');
+  }
+
+  if (!/[0-9]/.test(password)) {
+    errors.push('Password must contain at least one number (0-9)');
+  }
+
+  if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) {
+    errors.push('Password must contain at least one special character (!@#$%^&*...)');
+  }
+
   return {
-    devices: [],
-    locations: [],
-    averageTypingSpeed: 0,
-    loginTimes: [],
-    lastLoginTime: null,
-    loginAttempts: 0,
-    failedAttempts: 0,
-    riskScore: 0,
-    mfaRequired: true
+    isValid: errors.length === 0,
+    errors: errors
   };
 }
 
-exports.handler = async (event) => {
-  console.log('Registration event received:', { body: event.body, headers: event.headers });
+/**
+ * Sanitize username
+ * - Convert to lowercase
+ * - Trim whitespace
+ */
+function sanitizeUsername(username) {
+  if (!username) return '';
+  return username.toLowerCase().trim();
+}
+
+/**
+ * Validate email format
+ */
+function validateEmail(email) {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+}
+
+/**
+ * Validate username format
+ */
+function validateUsername(username) {
+  if (!username || username.length < 3) {
+    return { isValid: false, error: 'Username must be at least 3 characters long' };
+  }
+  if (username.length > 30) {
+    return { isValid: false, error: 'Username must not exceed 30 characters' };
+  }
+  return { isValid: true };
+}
+
+// =====================================================
+// LAMBDA HANDLER
+// =====================================================
+
+exports.handler = async (event, context) => {
+  console.log('=== User Registration Request ===');
+  console.log('Event:', JSON.stringify(event, null, 2));
+
   try {
-    let requestBody;
+    // Parse request body
+    let body;
     try {
-      requestBody = typeof event.body === 'string' 
-        ? JSON.parse(event.body) 
-        : event.body;
-    } catch (error) {
-      return createErrorResponse(400, 'Invalid JSON in request body');
+      body = JSON.parse(event.body);
+    } catch (parseError) {
+      console.error('✗ JSON parse error:', parseError);
+      return createResponse(400, {
+        message: 'Invalid JSON in request body',
+        error: parseError.message
+      });
     }
-    const { username, password, email } = requestBody;
-    if (!username || !password) {
-      return createErrorResponse(400, 'Username and password are required');
+
+    const { username, password, email, phoneNumber } = body;
+    console.log('Registration attempt for username:', username);
+
+    // ===========================
+    // Step 1: Validate Required Fields
+    // ===========================
+    if (!username || !password || !email) {
+      console.warn('✗ Missing required fields');
+      return createResponse(400, {
+        message: 'Missing required fields',
+        requiredFields: ['username', 'password', 'email'],
+        receivedFields: {
+          username: !!username,
+          password: !!password,
+          email: !!email
+        }
+      });
     }
-    if (username.length < 3 || username.length > 20) {
-      return createErrorResponse(400, 'Username must be between 3 and 20 characters');
+
+    // ===========================
+    // Step 2: Sanitize and Validate Username
+    // ===========================
+    const sanitizedUsername = sanitizeUsername(username);
+    const usernameValidation = validateUsername(sanitizedUsername);
+
+    if (!usernameValidation.isValid) {
+      console.warn('✗ Invalid username:', usernameValidation.error);
+      return createResponse(400, {
+        message: usernameValidation.error,
+        providedUsername: username
+      });
     }
-    if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
-      return createErrorResponse(400, 'Username can only contain alphanumeric characters, hyphens, and underscores');
+
+    console.log('✓ Username valid:', sanitizedUsername);
+
+    // ===========================
+    // Step 3: Validate Email Format
+    // ===========================
+    if (!validateEmail(email)) {
+      console.warn('✗ Invalid email format:', email);
+      return createResponse(400, {
+        message: 'Invalid email format',
+        providedEmail: email,
+        example: 'user@example.com'
+      });
     }
+
+    console.log('✓ Email valid:', email);
+
+    // ===========================
+    // Step 4: Validate Password Strength
+    // ===========================
+    console.log('Validating password strength...');
     const passwordValidation = validatePasswordStrength(password);
+
     if (!passwordValidation.isValid) {
-      return createErrorResponse(400, passwordValidation.message);
+      console.warn('✗ Password validation failed:', passwordValidation.errors);
+      return createResponse(400, {
+        message: 'Password does not meet security requirements',
+        errors: passwordValidation.errors,
+        requirements: {
+          minLength: 8,
+          maxLength: 128,
+          mustContain: [
+            'At least one uppercase letter (A-Z)',
+            'At least one lowercase letter (a-z)',
+            'At least one number (0-9)',
+            'At least one special character (!@#$%^&*...)'
+          ]
+        }
+      });
     }
-    const usernameExists = await checkUsernameExists(username);
+
+    console.log('✓ Password strength validation passed');
+
+    // ===========================
+    // Step 5: Check Username Uniqueness (Using GSI)
+    // ===========================
+    console.log('Checking if username already exists (using GSI username-index)...');
+    let usernameExists = false;
+
+    try {
+      const queryResult = await dynamodb.query({
+        TableName: USERS_TABLE,
+        IndexName: 'username-index',  // Global Secondary Index
+        KeyConditionExpression: 'username = :username',
+        ExpressionAttributeValues: {
+          ':username': sanitizedUsername
+        },
+        Limit: 1
+      }).promise();
+
+      usernameExists = queryResult.Items && queryResult.Items.length > 0;
+      console.log('Username exists:', usernameExists);
+    } catch (dbError) {
+      console.error('✗ DynamoDB GSI query error:', dbError);
+      return createResponse(500, {
+        message: 'Database error while checking username',
+        error: dbError.message
+      });
+    }
+
     if (usernameExists) {
-      return createErrorResponse(409, 'Username already taken. Please choose another.');
+      console.warn('✗ Username already taken:', sanitizedUsername);
+      return createResponse(409, {
+        message: 'Username already exists',
+        username: sanitizedUsername,
+        suggestion: 'Please choose a different username'
+      });
     }
-    const passwordHash = await hashPassword(password);
+
+    console.log('✓ Username is available');
+
+    // ===========================
+    // Step 6: Hash Password
+    // ===========================
+    console.log('Hashing password using bcrypt (salt rounds: 10)...');
+    let hashedPassword;
+
+    try {
+      hashedPassword = await hashPassword(password);
+      console.log('✓ Hash length:', hashedPassword.length, 'characters');
+      console.log('✓ Hash prefix:', hashedPassword.substring(0, 7));
+    } catch (hashError) {
+      console.error('✗ Password hashing error:', hashError);
+      return createResponse(500, {
+        message: 'Error processing password',
+        error: 'Password hashing failed'
+      });
+    }
+
+    // ===========================
+    // Step 7: Generate User ID
+    // ===========================
     const userId = uuidv4();
-    const timestamp = Date.now();
+    console.log('✓ Generated user ID:', userId);
+
+    // ===========================
+    // Step 8: Create User Record
+    // ===========================
+    const timestamp = new Date().toISOString();
+
     const userRecord = {
-      userId,
-      username,
-      passwordHash,
-      email: email || null,
-      status: 'active',
-      behaviorProfile: createBehaviorProfile(),
+      userId: userId,  // Partition Key
+      username: sanitizedUsername,
+      email: email,
+      phoneNumber: phoneNumber || null,
+      passwordHash: hashedPassword,
+      mfaEnabled: false,
+      mfaSecret: null,
+      backupCodes: [],
+      accountStatus: 'ACTIVE',
+      accountLocked: false,
+      failedLoginAttempts: 0,
+      lastLoginAt: null,
       createdAt: timestamp,
       updatedAt: timestamp,
-      registrationMethod: 'standard',
-      emailVerified: false,
-      phoneNumberVerified: false,
-      twoFactorEnabled: false
+      riskScore: 0,
+      trustedDevices: [],
+      registrationIP: event.requestContext?.identity?.sourceIp || 'unknown',
+      userAgent: event.headers?.['User-Agent'] || 'unknown'
     };
-    const params = {
-      TableName: USERS_TABLE,
-      Item: userRecord,
-      ConditionExpression: 'attribute_not_exists(userId)'
-    };
-    await dynamodb.put(params).promise();
-    return createSuccessResponse(201, {
-      success: true,
-      userId,
-      username,
-      message: 'User registered successfully. Please proceed with MFA setup.',
-      registeredAt: new Date(timestamp).toISOString()
+
+    console.log('✓ User record prepared');
+
+    // ===========================
+    // Step 9: Write to DynamoDB
+    // ===========================
+    console.log('Writing user record to DynamoDB...');
+
+    try {
+      await dynamodb.put({
+        TableName: USERS_TABLE,
+        Item: userRecord
+      }).promise();
+
+      console.log('✓ User saved successfully in DynamoDB');
+    } catch (dbError) {
+      console.error('✗ DynamoDB write error:', dbError);
+
+      return createResponse(500, {
+        message: 'Database error during registration',
+        error: dbError.message
+      });
+    }
+
+    // ===========================
+    // Step 10: Return Success Response
+    // ===========================
+    console.log('=== Registration Completed Successfully ===');
+
+    return createResponse(201, {
+      message: 'User registered successfully',
+      user: {
+        userId: userId,
+        username: sanitizedUsername,
+        email: email,
+        phoneNumber: phoneNumber || null,
+        mfaEnabled: false,
+        accountStatus: 'ACTIVE',
+        createdAt: timestamp
+      },
+      nextSteps: [
+        'You can now log in with your username and password',
+        'Consider enabling MFA for enhanced security'
+      ]
     });
+
   } catch (error) {
-    if (error.code === 'ConditionalCheckFailedException') {
-      return createErrorResponse(409, 'Registration failed. Please try again.');
-    }
-    if (error.code === 'ValidationException') {
-      return createErrorResponse(400, 'Invalid data format');
-    }
-    if (error.code === 'ProvisionedThroughputExceededException') {
-      return createErrorResponse(503, 'Service temporarily unavailable. Please try again later.');
-    }
-    return createErrorResponse(500, 'An error occurred during registration. Please try again later.');
+    // ===========================
+    // Global Error Handler
+    // ===========================
+    console.error('=== Unexpected Error During Registration ===');
+    console.error('Error:', error);
+    console.error('Stack:', error.stack);
+
+    return createResponse(500, {
+      message: 'Internal server error during registration',
+      error: error.message,
+      requestId: context.requestId
+    });
   }
 };
 
-function createSuccessResponse(statusCode, data) {
+/**
+ * Create consistent API Gateway response
+ */
+function createResponse(statusCode, body) {
   return {
-    statusCode,
+    statusCode: statusCode,
     headers: {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Content-Type',
-      'Access-Control-Allow-Methods': 'POST, OPTIONS'
+      'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
+      'Access-Control-Allow-Methods': 'POST,OPTIONS'
     },
-    body: JSON.stringify(data)
-  };
-}
-
-function createErrorResponse(statusCode, message) {
-  return {
-    statusCode,
-    headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Content-Type',
-      'Access-Control-Allow-Methods': 'POST, OPTIONS'
-    },
-    body: JSON.stringify({
-      success: false,
-      error: message,
-      timestamp: new Date().toISOString()
-    })
+    body: JSON.stringify(body, null, 2)
   };
 }
