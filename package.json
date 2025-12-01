@@ -1,20 +1,35 @@
 {
   "name": "aws-mfa-system",
   "version": "1.0.0",
-  "description": "An adaptive, risk-based multifactor authentication system built on AWS that combines multiple authentication factors with intelligent risk detection.",
-  "main": "index.js",
+  "description": "AWS MFA Authentication System with Behavioral Analysis",
+  "main": "src/handlers/mfa-login-handler.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node src/handlers/mfa-login-handler.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "zip -r lambda.zip src/ node_modules/ package.json",
+    "deploy": "npm run build && aws lambda update-function-code --function-name mfa-login-handler --zip-file fileb://lambda.zip"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/miheerak/aws-mfa-system.git"
+  "keywords": [
+    "aws",
+    "lambda",
+    "mfa",
+    "authentication",
+    "dynamodb"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "aws-sdk": "^2.1400.0",
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.3.1",
+    "jsonwebtoken": "^9.0.0",
+    "uuid": "^9.0.0"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "bugs": {
-    "url": "https://github.com/miheerak/aws-mfa-system/issues"
+  "devDependencies": {
+    "eslint": "^8.50.0"
   },
-  "homepage": "https://github.com/miheerak/aws-mfa-system#readme"
+  "engines": {
+    "node": "18.x",
+    "npm": ">=8.0.0"
+  }
 }
